@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Сканер кода</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #111; margin: 0; padding: 0; color: #fff; height: 100vh; display: flex; flex-direction: column; }
+    #reader { width: 100%; max-width: 500px; margin: 0 auto; }
+    #status { text-align: center; padding: 16px; font-size: 14px; min-height: 50px; }
+    .success { color: #4ade80; }
+    .error { color: #f87171; }
+    .info { color: #94a3b8; }
+    .controls { padding: 16px; text-align: center; }
+    button { background: #3b82f6; color: #fff; border: none; border-radius: 8px; padding: 12px 24px; font-size: 15px; font-weight: 600; cursor: pointer; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    .last { font-size: 12px; color: #94a3b8; text-align: center; padding: 0 16px 16px; }
+  </style>
+</head>
+<body>
+
+<div id="status" class="info">Нажмите «Начать сканирование»</div>
+<div id="reader"></div>
+<div class="controls">
+  <button id="startBtn" onclick="startScanner()">Начать сканирование</button>
+</div>
+<div class="last" id="lastResult"></div>
+
+<script>
+  // ⚠️ ЗАМЕНИТЕ на URL вашего развернутого веб-приложения Apps Script
+  const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec';
+
+  let html5QrCode = null;
+  let isScanning = false;
+  let lastCode = null;
+  let lastTime = 0;
+  const DEBOUNCE_MS = 3000; // не отправлять один и тот же код чаще раза в 3 секунды
+
+  function setStatus(text, cls) {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.className = cls || 'info';
+  }
+
+  function startScanner() {
+    if (isScanning) return;
+
+    if (!html5QrCode) {
+      html5QrCode = new Html5Qrcode("reader");
+    }
+
+    const config = {
+      fps: 10,
+      qrbox: { width: 250, height: 250 },
+      aspectRatio: 1.0
+    };
+
+    setStatus('Запрос доступа к камере...', 'info');
+
+    html5QrCode.start(
+      { facingMode: "environment" }, // задняя камера
+      config,
+      onScanSuccess,
+      onScanError
+    ).then(() => {
+      isScanning = true;
+      document.getElementById('startBtn').textContent = 'Сканирование...';
+      document.getElementById('startBtn').disabled = true;
+      setStatus('Наведите камеру на код', 'info');
+    }).catch(err => {
+      setStatus('Ошибка камеры: ' + err, 'error');
+      console.error(err);
+    });
+  }
+
+  function onScanSuccess(decodedText, decodedResult) {
+    const now = Date.now();
+
+    // Защита от повторной отправки того же кода
+    if (decodedText === lastCode && (now - lastTime) < DEBOUNCE_MS) {
+      return;
+    }
+    lastCode = decodedText;
+    lastTime = now;
+
+    // Показываем результат
+    setStatus('✅ ' + decodedText, 'success');
+    document.getElementById('lastResult').textContent = 'Последний: ' + decodedText;
+
+    // Отправляем в Apps Script
+    sendToSheet(decodedText);
+  }
+
+  function onScanError(err) {
+    // Игнорируем ошибки распознавания (нормально, пока не найден код)
+  }
+
+  function sendToSheet(code) {
+    const payload = {
+      code: code,
+      source: 'camera'
+    };
+
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors', // Apps Script doPost не возвращает CORS-заголовки, используем no-cors
+      headers: { 'Content-Type': 'text/plain' }, // избегаем preflight
+      body: JSON.stringify(payload)
+    }).then(() => {
+      // При no-cors ответ не читается, считаем успехом
+      console.log('Отправлено:', code);
+    }).catch(err => {
+      console.error('Ошибка отправки:', err);
+      setStatus('Ошибка отправки (код всё равно отсканирован)', 'error');
+    });
+  }
+
+  // Останавливаем камеру при уходе со страницы
+  window.addEventListener('beforeunload', () => {
+    if (html5QrCode && isScanning) {
+      html5QrCode.stop().catch(() => {});
+    }
+  });
+</script>
+</body>
+</html>
